@@ -10,9 +10,9 @@ def generate_launch_description():
         DeclareLaunchArgument('ip', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='10000'),
         Node(
-            package='social_sim_ros',
-            executable='tcp_server.py',
-            name='tcp_server',
+            package='ros_tcp_endpoint',
+            executable='default_server_endpoint',
+            name='UnityEndpoint',
             output='screen',
             respawn=True,
             parameters=[{

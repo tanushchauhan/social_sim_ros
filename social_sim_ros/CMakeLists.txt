@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.8)
 project(social_sim_ros)
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -18,13 +17,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SceneInfo.msg"
   "msg/RealDepthImage.msg"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs
-)
-
-ament_python_install_package(sean_bridge)
-
-install(PROGRAMS
-  src/tcp_server.py
-  DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY launch config params maps urdf
