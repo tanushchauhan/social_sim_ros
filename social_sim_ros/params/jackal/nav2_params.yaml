@@ -59,7 +59,7 @@ controller_server:
       angular_granularity: 0.025
       transform_tolerance: 5.0
       xy_goal_tolerance: 0.35
-      trans_stopped_velocity: 0.25
+      trans_stopped_velocity: 0.01
       short_circuit_trajectory_evaluation: true
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
@@ -105,7 +105,7 @@ local_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.30
+        inflation_radius: 0.50
       always_send_full_costmap: true
 
 global_costmap:
@@ -140,7 +140,7 @@ global_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.30
+        inflation_radius: 0.50
       always_send_full_costmap: true
 
 map_server:
