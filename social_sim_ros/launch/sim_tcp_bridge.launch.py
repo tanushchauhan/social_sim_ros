@@ -10,13 +10,12 @@ def generate_launch_description():
         DeclareLaunchArgument('ip', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='10000'),
         Node(
-            package='ros_tcp_endpoint',
-            executable='default_server_endpoint',
-            name='UnityEndpoint',
+            package='social_sim_ros',
+            executable='sean_tcp_endpoint',
             output='screen',
             respawn=True,
             parameters=[{
-                'use_sim_time': True,
+                'use_sim_time': False,
                 'ROS_IP': ParameterValue(LaunchConfiguration('ip'), value_type=str),
                 'ROS_TCP_PORT': ParameterValue(LaunchConfiguration('port'), value_type=int),
             }],

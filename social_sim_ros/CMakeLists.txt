@@ -23,4 +23,8 @@ install(DIRECTORY launch config params maps urdf
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS scripts/sean_tcp_endpoint
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()

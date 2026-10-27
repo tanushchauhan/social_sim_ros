@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Compatibility fixes for ROS-TCP-Endpoint 54c1a64 and connector v0.7."""
+
+import threading
+
+import rclpy
+from ros_tcp_endpoint.server import SysCommands, TcpServer
+
+
+class LifecycleCommands(SysCommands):
+    def __init__(self, server):
+        super().__init__(server)
+        self.publisher_specs = {}
+        self.subscriber_specs = {}
+
+    def publish(self, topic, message_name, queue_size=10, latch=False):
+        spec = (message_name, queue_size, latch)
+        if topic in self.tcp_server.publishers_table and self.publisher_specs.get(topic) == spec:
+            return
+        super().publish(topic, message_name, queue_size, latch)
+        if topic in self.tcp_server.publishers_table:
+            self.publisher_specs[topic] = spec
+
+    def subscribe(self, topic, message_name):
+        if topic in self.tcp_server.subscribers_table and self.subscriber_specs.get(topic) == message_name:
+            return
+        super().subscribe(topic, message_name)
+        if topic in self.tcp_server.subscribers_table:
+            self.subscriber_specs[topic] = message_name
+
+    def _remove(self, table, topic):
+        node = table.pop(topic, None)
+        if node is not None:
+            self.tcp_server.unregister_node(node)
+
+    def remove_subscriber(self, topic):
+        self._remove(self.tcp_server.subscribers_table, topic)
+        self.subscriber_specs.pop(topic, None)
+
+    def remove_publisher(self, topic):
+        self._remove(self.tcp_server.publishers_table, topic)
+        self.publisher_specs.pop(topic, None)
+
+    def remove_ros_service(self, topic):
+        self._remove(self.tcp_server.ros_services_table, topic)
+
+    def remove_unity_service(self, topic):
+        self._remove(self.tcp_server.unity_services_table, topic)
+
+
+class LifecycleServer(TcpServer):
+    def __init__(self):
+        super().__init__('UnityEndpoint')
+        self.syscommands = LifecycleCommands(self)
+        self.registration_lock = threading.Lock()
+
+    def handle_syscommand(self, topic, data):
+        # A departing connection and its replacement can register concurrently.
+        with self.registration_lock:
+            if not callable(getattr(self.syscommands, topic[2:], None)):
+                self.send_unity_error(f'Unsupported system command: {topic}')
+                return
+            super().handle_syscommand(topic, data)
+
+    def unregister_node(self, old_node):
+        if old_node is not None:
+            if self.executor is not None:
+                self.executor.remove_node(old_node)
+            old_node.unregister()
+
+
+def main():
+    rclpy.init()
+    server = LifecycleServer()
+    try:
+        server.start()
+        server.setup_executor()
+    finally:
+        server.destroy_nodes()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
