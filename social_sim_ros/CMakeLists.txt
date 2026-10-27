@@ -27,4 +27,12 @@ install(PROGRAMS scripts/sean_tcp_endpoint
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(FILES scripts/sean_transport.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES LICENSE.ros_tcp_endpoint
+  DESTINATION share/${PROJECT_NAME}/licenses
+)
+
 ament_package()
