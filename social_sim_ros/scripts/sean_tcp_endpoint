@@ -55,7 +55,9 @@ class LifecycleServer(TcpServer):
     def __init__(self):
         super().__init__('UnityEndpoint')
         self.syscommands = LifecycleCommands(self)
-        self.registration_lock = threading.Lock()
+        self.registration_lock = threading.RLock()
+        self.registration_ready = threading.Event()
+        self.registration_ready.set()
         self.unity_tcp_sender = LifecycleSender(self)
         self.stopping = threading.Event()
         self.listener = None
@@ -112,7 +114,17 @@ class LifecycleServer(TcpServer):
                     executor.add_node(node)
         # A bounded wait lets Python's signal handlers run while ROS is idle.
         while rclpy.ok() and not self.stopping.is_set():
-            executor.spin_once(timeout_sec=0.2)
+            self.spin_registered_once(executor)
+
+    def spin_registered_once(self, executor):
+        # QoS-event handles can be destroyed between snapshot and wait-set
+        # insertion unless registration changes share this critical section.
+        if not self.registration_ready.wait(timeout=0.02):
+            return
+        with self.registration_lock:
+            if not self.registration_ready.is_set():
+                return
+            executor.spin_once(timeout_sec=0.02)
 
     def stop(self):
         self.stopping.set()
@@ -130,17 +142,25 @@ class LifecycleServer(TcpServer):
 
     def handle_syscommand(self, topic, data):
         # A departing connection and its replacement can register concurrently.
-        with self.registration_lock:
-            if not callable(getattr(self.syscommands, topic[2:], None)):
-                self.send_unity_error(f'Unsupported system command: {topic}')
-                return
-            super().handle_syscommand(topic, data)
+        # Give the single active client priority over another idle executor wait.
+        self.registration_ready.clear()
+        if self.executor is not None:
+            self.executor.wake()
+        try:
+            with self.registration_lock:
+                if not callable(getattr(self.syscommands, topic[2:], None)):
+                    self.send_unity_error(f'Unsupported system command: {topic}')
+                    return
+                super().handle_syscommand(topic, data)
+        finally:
+            self.registration_ready.set()
 
     def unregister_node(self, old_node):
-        if old_node is not None:
-            if self.executor is not None:
-                self.executor.remove_node(old_node)
-            old_node.unregister()
+        with self.registration_lock:
+            if old_node is not None:
+                if self.executor is not None:
+                    self.executor.remove_node(old_node)
+                old_node.unregister()
 
 
 def main():
