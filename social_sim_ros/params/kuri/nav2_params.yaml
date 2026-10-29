@@ -170,7 +170,9 @@ planner_server:
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: nav2_navfn_planner/NavfnPlanner
-      tolerance: 0.5
+      # A blocked goal must not end the path short: with the 0.35 m goal
+      # checker, success then stays within 0.4 m of the requested goal.
+      tolerance: 0.05
       use_astar: false
       allow_unknown: true
 
