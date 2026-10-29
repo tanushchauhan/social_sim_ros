@@ -1,6 +1,6 @@
 # Message defining an entry of a agent
 
-Header      header         # Age of the track
+std_msgs/Header      header         # Age of the track
 uint64      track_id       # Unique ID for each agent
 
 # Type of agent

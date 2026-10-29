@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Compatibility fixes for ROS-TCP-Endpoint 54c1a64 and connector v0.7."""
+
+import threading
+import signal
+import socket
+from sean_transport import LifecycleClient, LifecycleSender
+
+import rclpy
+from ros_tcp_endpoint.server import SysCommands, TcpServer
+
+
+class LifecycleCommands(SysCommands):
+    def __init__(self, server):
+        super().__init__(server)
+        self.publisher_specs = {}
+        self.subscriber_specs = {}
+
+    def publish(self, topic, message_name, queue_size=10, latch=False):
+        spec = (message_name, queue_size, latch)
+        if topic in self.tcp_server.publishers_table and self.publisher_specs.get(topic) == spec:
+            return
+        super().publish(topic, message_name, queue_size, latch)
+        if topic in self.tcp_server.publishers_table:
+            self.publisher_specs[topic] = spec
+
+    def subscribe(self, topic, message_name):
+        if topic in self.tcp_server.subscribers_table and self.subscriber_specs.get(topic) == message_name:
+            return
+        super().subscribe(topic, message_name)
+        if topic in self.tcp_server.subscribers_table:
+            self.subscriber_specs[topic] = message_name
+
+    def _remove(self, table, topic):
+        node = table.pop(topic, None)
+        if node is not None:
+            self.tcp_server.unregister_node(node)
+
+    def remove_subscriber(self, topic):
+        self._remove(self.tcp_server.subscribers_table, topic)
+        self.subscriber_specs.pop(topic, None)
+
+    def remove_publisher(self, topic):
+        self._remove(self.tcp_server.publishers_table, topic)
+        self.publisher_specs.pop(topic, None)
+
+    def remove_ros_service(self, topic):
+        self._remove(self.tcp_server.ros_services_table, topic)
+
+    def remove_unity_service(self, topic):
+        self._remove(self.tcp_server.unity_services_table, topic)
+
+
+class LifecycleServer(TcpServer):
+    def __init__(self):
+        super().__init__('UnityEndpoint')
+        self.syscommands = LifecycleCommands(self)
+        self.registration_lock = threading.RLock()
+        self.registration_ready = threading.Event()
+        self.registration_ready.set()
+        self.unity_tcp_sender = LifecycleSender(self)
+        self.stopping = threading.Event()
+        self.listener = None
+        self.listener_thread = None
+        self.active_client = None
+        self._executor_owner = None
+
+    def start(self):
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind((self.tcp_ip, self.tcp_port))
+        self.listener.listen(self.connections)
+        self.listener.settimeout(0.2)
+        self.listener_thread = threading.Thread(target=self.listen_loop, name='sean-listener')
+        self.listener_thread.start()
+        self.loginfo(f'Starting server on {self.tcp_ip}:{self.listener.getsockname()[1]}')
+
+    def listen_loop(self):
+        while not self.stopping.is_set():
+            try:
+                conn, (ip, port) = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                if self.stopping.is_set():
+                    break
+                raise
+            if self.active_client is not None:
+                if self.active_client.is_alive():
+                    self.logwarn('Replacing a still-active Unity connection')
+                    self.active_client.stop()
+                self.active_client.join(timeout=3)
+                if self.active_client.is_alive():
+                    conn.close()
+                    self.logerr('Previous Unity client did not stop')
+                    continue
+            if self.stopping.is_set():
+                conn.close()
+                break
+            self.active_client = LifecycleClient(conn, self, ip, port)
+            self.active_client.start()
+
+    def setup_executor(self):
+        from rclpy.executors import MultiThreadedExecutor
+        # Node.executor is a weak reference. Keep a strong owner, and register
+        # anything accepted before executor startup under the same lock.
+        with self.registration_lock:
+            executor = MultiThreadedExecutor(num_threads=2)
+            self._executor_owner = executor
+            executor.add_node(self)
+            for table in (self.publishers_table, self.subscribers_table,
+                          self.ros_services_table, self.unity_services_table):
+                for node in table.values():
+                    executor.add_node(node)
+        # A bounded wait lets Python's signal handlers run while ROS is idle.
+        while rclpy.ok() and not self.stopping.is_set():
+            self.spin_registered_once(executor)
+
+    def spin_registered_once(self, executor):
+        # QoS-event handles can be destroyed between snapshot and wait-set
+        # insertion unless registration changes share this critical section.
+        if not self.registration_ready.wait(timeout=0.02):
+            return
+        with self.registration_lock:
+            if not self.registration_ready.is_set():
+                return
+            executor.spin_once(timeout_sec=0.02)
+
+    def stop(self):
+        self.stopping.set()
+        if self.listener is not None:
+            self.listener.close()
+        if self.listener_thread is not None:
+            self.listener_thread.join(timeout=4)
+            if self.listener_thread.is_alive():
+                raise RuntimeError('Endpoint listener did not stop')
+        if self.active_client is not None:
+            self.active_client.stop()
+            self.active_client.join(timeout=3)
+            if self.active_client.is_alive():
+                raise RuntimeError('Endpoint client did not stop')
+
+    def handle_syscommand(self, topic, data):
+        # A departing connection and its replacement can register concurrently.
+        # Give the single active client priority over another idle executor wait.
+        self.registration_ready.clear()
+        if self.executor is not None:
+            self.executor.wake()
+        try:
+            with self.registration_lock:
+                if not callable(getattr(self.syscommands, topic[2:], None)):
+                    self.send_unity_error(f'Unsupported system command: {topic}')
+                    return
+                super().handle_syscommand(topic, data)
+        finally:
+            self.registration_ready.set()
+
+    def unregister_node(self, old_node):
+        with self.registration_lock:
+            if old_node is not None:
+                if self.executor is not None:
+                    self.executor.remove_node(old_node)
+                old_node.unregister()
+
+
+def main():
+    from rclpy.signals import SignalHandlerOptions
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGINT, interrupt)
+    signal.signal(signal.SIGTERM, interrupt)
+    server = LifecycleServer()
+    try:
+        server.start()
+        server.setup_executor()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+        if server.executor is not None:
+            server.executor.shutdown()
+        server.destroy_nodes()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

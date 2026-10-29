@@ -1,9 +1,9 @@
 # Message containing the information of running a single A-B navigation trial
 
-Header                    header
+std_msgs/Header                    header
 
 # Information about the current interaction
-time                      trial_start                                    # When did we start tracking metrics for this trial
+builtin_interfaces/Time                      trial_start                                    # When did we start tracking metrics for this trial
 float64                   timeout_time                                   # How long is allowed for the episode have to complete?
 string                    trial_name                                     # Which trial name are we running
 uint16                    trial_number                                   # Which trial number are we running
@@ -17,7 +17,7 @@ geometry_msgs/Pose        robot_goal
 float64                   dist_to_target                                 # Current distance to target
 float64                   min_dist_to_target                             # Closest difference to the target the robot has come
 geometry_msgs/Pose[]      robot_poses                                    # Poses of the robot over the episode
-time[]                    robot_poses_ts                                 # Timestamps of the robot poses over the episode
+builtin_interfaces/Time[]                    robot_poses_ts                                 # Timestamps of the robot poses over the episode
 
 # Robot location relative to pedestrians
 float64                   min_dist_to_ped                                # Minimum distance to any pedestrian throughout the trial
