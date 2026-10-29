@@ -23,7 +23,7 @@ install(DIRECTORY launch config params maps urdf
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(PROGRAMS scripts/sean_tcp_endpoint
+install(PROGRAMS scripts/sean_tcp_endpoint scripts/sean_task_driver
   DESTINATION lib/${PROJECT_NAME}
 )
 

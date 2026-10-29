@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Send each SEAN task goal to Nav2 once, then start the next task.
+
+Unity runs with -external-goals and -completion-distance 0, so Nav2 owns
+arrival. Each new trial's robot_goal from /social_sim/metrics becomes one
+NavigateToPose action; costmaps are cleared first because a new task teleports
+the robot. With loop enabled, a finished action requests the next task.
+"""
+
+import rclpy
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import NavigateToPose
+from nav2_msgs.srv import ClearEntireCostmap
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from social_sim_ros.msg import TrialInfo
+from std_msgs.msg import Bool
+
+STATUS = {GoalStatus.STATUS_SUCCEEDED: 'succeeded', GoalStatus.STATUS_ABORTED: 'aborted',
+          GoalStatus.STATUS_CANCELED: 'canceled'}
+
+
+class TaskDriver(Node):
+    def __init__(self):
+        super().__init__('sean_task_driver')
+        self.loop = self.declare_parameter('loop', True).value
+        self.settle = self.declare_parameter('settle_seconds', 2.0).value
+        self.navigator = ActionClient(self, NavigateToPose, '/navigate_to_pose')
+        self.clearers = [self.create_client(ClearEntireCostmap, name) for name in (
+            '/global_costmap/clear_entirely_global_costmap', '/local_costmap/clear_entirely_local_costmap')]
+        self.new_task = self.create_publisher(Bool, '/social_sim/control/task/new', 10)
+        self.create_subscription(TrialInfo, '/social_sim/metrics', self.on_trial, qos_profile_sensor_data)
+        self.key = None
+        self.active = None
+        self.pending = None
+        self.timer = None
+
+    def on_trial(self, info):
+        # A scene reload restarts numbering, so the start pose also identifies a task.
+        start = info.robot_start.position
+        key = (info.trial_number, round(start.x, 2), round(start.y, 2))
+        if key == self.key:
+            return
+        self.key = key
+        self.pending = info
+        # Let the teleported robot and its sensors settle before planning.
+        if self.timer is not None:
+            self.destroy_timer(self.timer)
+        self.timer = self.create_timer(self.settle, self.send_pending)
+
+    def send_pending(self):
+        self.destroy_timer(self.timer)
+        self.timer = None
+        info, self.pending = self.pending, None
+        if info is None:
+            return
+        if not self.navigator.server_is_ready():
+            self.get_logger().info('Waiting for Nav2')
+            self.pending = info
+            self.timer = self.create_timer(1.0, self.send_pending)
+            return
+        for client in self.clearers:
+            if client.service_is_ready():
+                client.call_async(ClearEntireCostmap.Request())
+        goal = NavigateToPose.Goal()
+        goal.pose = PoseStamped()
+        goal.pose.header.frame_id = 'map'
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose = info.robot_goal
+        position = info.robot_goal.position
+        self.get_logger().info(f'Task {info.trial_number}: goal ({position.x:.2f}, {position.y:.2f})')
+        # A new goal replaces the running one in Nav2; cancelling first can cancel its replacement.
+        self.navigator.send_goal_async(goal).add_done_callback(
+            lambda future, number=info.trial_number, key=self.key: self.on_accepted(future, number, key))
+
+    def on_accepted(self, future, number, key):
+        handle = future.result()
+        if not handle.accepted:
+            self.get_logger().warn(f'Task {number}: Nav2 rejected the goal')
+            return
+        self.active = handle
+        handle.get_result_async().add_done_callback(lambda result: self.on_result(result, number, key, handle))
+
+    def on_result(self, future, number, key, handle):
+        if self.active is handle:
+            self.active = None
+        status = future.result().status
+        if key != self.key:
+            self.get_logger().info(f'Task {number}: replaced by a new task')
+            return
+        if status == GoalStatus.STATUS_CANCELED:
+            return
+        self.get_logger().info(f'Task {number}: {STATUS.get(status, status)}')
+        if self.loop:
+            self.new_task.publish(Bool(data=True))
+
+
+def main():
+    rclpy.init()
+    node = TaskDriver()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node.active is not None:
+            node.active.cancel_goal_async()
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()
