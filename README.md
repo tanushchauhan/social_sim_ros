@@ -18,7 +18,7 @@ own name, and the bridge uses wall time so it can recover while simulation
 time is unavailable. Message timestamps still come from Unity. The upstream
 endpoint can log EOF and a sender write racing socket closure during reload;
 these diagnostics do not establish failure or success without sensor and
-registration checks. See the workspace repository's `VALIDATION.md`.
+registration checks. See the workspace repository's `docs/validation.md`.
 
 ## Warehouse Kuri navigation
 
